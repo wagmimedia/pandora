@@ -10,19 +10,6 @@ export const config = {
 };
 
 export default async function handler(req) {
-  // --- DIAGNOSTIC LOGS START ---
-  // This will help us check if the key is loaded in Vercel's environment.
-  console.log("--- Pandora API Function Started ---");
-  if (process.env.GROQ_API_KEY) {
-    console.log("SUCCESS: GROQ_API_KEY environment variable was found.");
-    console.log("Key starts with:", process.env.GROQ_API_KEY.substring(0, 5)); // Safely log first 5 chars
-  } else {
-    console.error("ERROR: GROQ_API_KEY environment variable is MISSING or empty.");
-  }
-  console.log("--- Diagnostics End ---");
-  // --- DIAGNOSTIC LOGS END ---
-
-
   if (req.method !== 'POST') {
     return new Response(JSON.stringify({ error: 'Method Not Allowed' }), {
       status: 405,
@@ -59,7 +46,7 @@ export default async function handler(req) {
     const allMessages = [systemPrompt, ...messages];
 
     const response = await groq.chat.completions.create({
-      model: 'llama3-8b-8192',
+      model: 'llama-3.3-70b-versatile', // <-- Updated Model from your screenshot
       messages: allMessages,
       tools: tools,
       tool_choice: "auto",
@@ -85,7 +72,7 @@ export default async function handler(req) {
             });
 
             const secondResponse = await groq.chat.completions.create({
-              model: "llama3-8b-8192",
+              model: "llama-3.3-70b-versatile", // <-- Updated Model from your screenshot
               messages: allMessages,
             });
             replyContent = secondResponse.choices[0].message.content;
@@ -109,9 +96,7 @@ export default async function handler(req) {
 
   } catch (error) {
     console.error('Groq API Error:', error);
-    // Add the diagnostic key check to the error message for more context
-    const keyExists = !!process.env.GROQ_API_KEY;
-    return new Response(JSON.stringify({ error: `Failed to communicate with Pandora's brain. (API Key Found: ${keyExists})` }), {
+    return new Response(JSON.stringify({ error: `Failed to communicate with Pandora's brain.` }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },
     });
