@@ -46,7 +46,7 @@ export default async function handler(req) {
     const allMessages = [systemPrompt, ...messages];
 
     const response = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile', // <-- Updated Model from your screenshot
+      model: 'llama3-70b-8192', // <-- Corrected, more stable model for conversation
       messages: allMessages,
       tools: tools,
       tool_choice: "auto",
@@ -72,7 +72,7 @@ export default async function handler(req) {
             });
 
             const secondResponse = await groq.chat.completions.create({
-              model: "llama-3.3-70b-versatile", // <-- Updated Model from your screenshot
+              model: "llama3-70b-8192", // <-- Corrected, more stable model for conversation
               messages: allMessages,
             });
             replyContent = secondResponse.choices[0].message.content;
