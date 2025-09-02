@@ -4,11 +4,6 @@ const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY,
 });
 
-// Set the runtime to edge for best performance
-export const config = {
-  runtime: 'edge',
-};
-
 export default async function handler(req) {
   if (req.method !== 'POST') {
     return new Response(JSON.stringify({ error: 'Method Not Allowed' }), {
@@ -46,7 +41,7 @@ export default async function handler(req) {
     const allMessages = [systemPrompt, ...messages];
 
     const response = await groq.chat.completions.create({
-      model: 'llama3-8b-8192', // <-- Corrected, more stable model for conversation
+      model: 'llama3-70b-8192', 
       messages: allMessages,
       tools: tools,
       tool_choice: "auto",
@@ -72,7 +67,7 @@ export default async function handler(req) {
             });
 
             const secondResponse = await groq.chat.completions.create({
-              model: "llama3-70b-8192", // <-- Corrected, more stable model for conversation
+              model: "llama3-70b-8192", 
               messages: allMessages,
             });
             replyContent = secondResponse.choices[0].message.content;
