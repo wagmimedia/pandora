@@ -1,22 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-// Landing Page Component
-const LandingPage = ({ onLaunch }) => {
-  return (
-    <div className="landing-container">
-      <h1 className="landing-title">Pandora</h1>
-      <p className="landing-subtitle">
-        Your snarky, helpful AI guide to the volatile world of lunar-based crypto trading. Ask anything, but don't expect her to be nice about it.
-      </p>
-      <button className="launch-button" onClick={onLaunch}>
-        Launch Pandora
-      </button>
-    </div>
-  );
-};
-
-// Main App Component
-const App = () => {
+function App() {
   const [showChat, setShowChat] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -31,88 +15,106 @@ const App = () => {
     scrollToBottom();
   }, [messages]);
 
-  const handleSend = async () => {
-    if (input.trim() === '' || isLoading) return;
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!input.trim() || isLoading) return;
 
     const userMessage = { role: 'user', content: input };
-    setMessages(prev => [...prev, userMessage]);
+    const newMessages = [...messages, userMessage];
+    setMessages(newMessages);
     setInput('');
     setIsLoading(true);
+
+    setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
 
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ messages: [...messages, userMessage] }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: newMessages.map(({ role, content }) => ({ role, content })) }),
       });
 
-      if (!response.ok) {
-        throw new Error(`API error: ${response.statusText}`);
+      if (!response.ok || !response.body) {
+        throw new Error('Failed to get streaming response.');
       }
 
-      const data = await response.json();
-      const botMessage = { role: 'bot', content: data.reply };
-      setMessages(prev => [...prev, botMessage]);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        
+        const chunk = decoder.decode(value, { stream: true });
+        
+        setMessages(prev => {
+          const lastMsgIndex = prev.length - 1;
+          const updatedLastMsg = {
+            ...prev[lastMsgIndex],
+            content: prev[lastMsgIndex].content + chunk,
+          };
+          return [...prev.slice(0, lastMsgIndex), updatedLastMsg];
+        });
+      }
 
     } catch (error) {
-      console.error("Failed to get response from Pandora:", error);
-      const errorMessage = { role: 'bot', content: "Sorry, I'm having trouble connecting to my brain right now. Try again in a moment." };
-      setMessages(prev => [...prev, errorMessage]);
+      console.error('Fetch error:', error);
+      setMessages(prev => {
+          const lastMsgIndex = prev.length - 1;
+          const updatedLastMsg = {
+            ...prev[lastMsgIndex],
+            content: "Sorry, I'm having trouble connecting to my brain right now. Try again in a moment.",
+          };
+          return [...prev.slice(0, lastMsgIndex), updatedLastMsg];
+      });
     } finally {
       setIsLoading(false);
     }
   };
-  
-  const handleKeyPress = (e) => {
-    if (e.key === 'Enter') {
-      handleSend();
-    }
-  };
 
   if (!showChat) {
-    return <LandingPage onLaunch={() => setShowChat(true)} />;
+    return (
+      <div className="landing-page">
+        <div className="landing-content">
+          <div className="logo"></div>
+          <h1>Pandora</h1>
+          <p>Your snarky guide to the cosmos of crypto trading.</p>
+          <button onClick={() => setShowChat(true)}>Launch Pandora</button>
+        </div>
+      </div>
+    );
   }
 
   return (
     <div className="chat-container">
       <div className="chat-header">Talk to Pandora</div>
-      <div className="messages-list">
+      <div className="messages">
         {messages.map((msg, index) => (
           <div key={index} className={`message ${msg.role}`}>
-            {msg.content}
+             {msg.role === 'assistant' && msg.content === '' && isLoading && index === messages.length - 1 ? (
+              <div className="typing-indicator">
+                <span></span><span></span><span></span>
+              </div>
+            ) : (
+              msg.content
+            )}
           </div>
         ))}
-        {isLoading && (
-          <div className="message bot loading">
-            <span></span><span></span><span></span>
-          </div>
-        )}
         <div ref={messagesEndRef} />
       </div>
-      <div className="input-area">
+      <form onSubmit={handleSubmit} className="input-form">
         <input
           type="text"
-          className="input-field"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyPress={handleKeyPress}
           placeholder="Ask Pandora anything..."
           disabled={isLoading}
         />
-        <button
-          className="send-button"
-          onClick={handleSend}
-          disabled={isLoading || input.trim() === ''}
-        >
-          Send
-        </button>
-      </div>
+        <button type="submit" disabled={isLoading}>Send</button>
+      </form>
     </div>
   );
-};
+}
 
 export default App;
-
 
