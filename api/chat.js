@@ -46,7 +46,7 @@ export default async function handler(req) {
     const allMessages = [systemPrompt, ...messages];
 
     const response = await groq.chat.completions.create({
-      model: 'llama3-70b-8192', // <-- Corrected, more stable model for conversation
+      model: 'llama3-8b-8192', // <-- Corrected, more stable model for conversation
       messages: allMessages,
       tools: tools,
       tool_choice: "auto",
