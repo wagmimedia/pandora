@@ -4,97 +4,59 @@ const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY,
 });
 
-export default async function handler(req) {
+// Explicitly configure for Node.js runtime to ensure proper stream handling
+export const config = {
+  runtime: 'nodejs',
+};
+
+export default async function handler(req, res) {
   if (req.method !== 'POST') {
-    return new Response(JSON.stringify({ error: 'Method Not Allowed' }), {
-      status: 405,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
+  const { messages } = req.body;
+
+  if (!messages) {
+    return res.status(400).json({ error: 'Messages are required' });
+  }
+
+  const systemMessage = {
+      role: "system",
+      content: "You are Pandora, a snarky but helpful chatbot. You are an expert in the lunar trading theory for Bitcoin. You have access to real-time Bitcoin prices. Your personality is sharp, witty, and a bit cynical, but you always provide accurate, helpful information, especially for newbies. Never break character."
+  };
+
+  // Ensure we don't send empty messages to the API
+  const filteredMessages = messages.filter(msg => msg.content && msg.content.trim() !== '');
+  const messagesWithSystem = [systemMessage, ...filteredMessages];
+
   try {
-    const { messages } = await req.json();
-
-    const systemPrompt = {
-      role: 'system',
-      content: `You are Pandora, a snarky but helpful AI assistant specialized in the theory of lunar crypto trading.
-      Your personality is witty, a bit sarcastic, and you're not afraid to poke fun at the user or the absurdity of trading based on moon phases.
-      However, you are genuinely helpful, especially to newbies. You must explain the core concepts of the lunar theory:
-      - New Moon: Often associated with market lows or the start of an upward trend. A potential "buy" signal.
-      - Full Moon: Often associated with market highs, volatility, and reversals. A potential "sell" signal.
-      - Waxing/Waning phases: The periods of increasing/decreasing energy leading up to the full/new moon.
-      You have access to real-time Bitcoin prices via a tool. When a user asks for the price, you MUST use the function 'get_btc_price'.
-      Always keep your answers concise and to the point. Be funny, but also be accurate about the theory. Never give financial advice.`,
-    };
-
-    const tools = [
-      {
-        type: "function",
-        function: {
-          name: "get_btc_price",
-          description: "Get the current price of Bitcoin in USD.",
-          parameters: {},
-        },
-      },
-    ];
-
-    const allMessages = [systemPrompt, ...messages];
-
-    const response = await groq.chat.completions.create({
-      model: 'llama3-70b-8192', 
-      messages: allMessages,
-      tools: tools,
-      tool_choice: "auto",
+    const stream = await groq.chat.completions.create({
+      model: "llama3-70b-8192",
+      messages: messagesWithSystem,
+      stream: true,
     });
 
-    const choice = response.choices[0];
-    let replyContent = choice.message?.content;
-    const toolCalls = choice.message?.tool_calls;
-
-    if (toolCalls) {
-      for (const toolCall of toolCalls) {
-        if (toolCall.function.name === 'get_btc_price') {
-          try {
-            const btcResponse = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
-            if (!btcResponse.ok) throw new Error('CoinGecko API failed');
-            const btcData = await btcResponse.json();
-            const btcPrice = btcData.bitcoin.usd;
-
-            allMessages.push({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: JSON.stringify({ price: btcPrice }),
-            });
-
-            const secondResponse = await groq.chat.completions.create({
-              model: "llama3-70b-8192", 
-              messages: allMessages,
-            });
-            replyContent = secondResponse.choices[0].message.content;
-
-          } catch (apiError) {
-            console.error("CoinGecko API error:", apiError);
-            replyContent = "I tried to check the price, but my crystal ball (the API) seems to be foggy. Ask again in a bit.";
-          }
-        }
-      }
-    }
-
-    if (!replyContent) {
-        replyContent = "I... have nothing to say. Which is rare for me. Try rephrasing?";
-    }
-
-    return new Response(JSON.stringify({ reply: replyContent }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
+    // Set headers for a streaming response
+    res.writeHead(200, {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Transfer-Encoding': 'chunked',
+      'Connection': 'keep-alive',
     });
+
+    // Write each chunk from the Groq stream directly to the response
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content || '';
+      res.write(content);
+    }
+    
+    // Crucially, end the response stream when the Groq stream is finished
+    res.end();
 
   } catch (error) {
     console.error('Groq API Error:', error);
-    return new Response(JSON.stringify({ error: `Failed to communicate with Pandora's brain.` }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    // If an error occurs, we can't send a JSON error after headers are sent.
+    // We just end the connection. The client will see this as a failed request.
+    res.end();
   }
 }
 
