@@ -44,7 +44,7 @@ export default async function handler(req, res) {
   };
 
   const payload = {
-    model: "llama3-70b-8192",
+    model: "llama-3.3-70b-versatile", // Updated to current production model
     messages: [systemMessage, ...messages],
     stream: true,
     temperature: 0.7,
