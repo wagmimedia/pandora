@@ -25,6 +25,7 @@ function App() {
     setInput('');
     setIsLoading(true);
 
+    // Add empty assistant message for streaming
     setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
 
     try {
@@ -34,38 +35,85 @@ function App() {
         body: JSON.stringify({ messages: newMessages.map(({ role, content }) => ({ role, content })) }),
       });
 
-      if (!response.ok || !response.body) {
-        throw new Error('Failed to get streaming response.');
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      if (!response.body) {
+        throw new Error('No response body received');
       }
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
+      let buffer = '';
       
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
         
-        const chunk = decoder.decode(value, { stream: true });
+        // Add chunk to buffer
+        buffer += decoder.decode(value, { stream: true });
         
-        setMessages(prev => {
-          const lastMsgIndex = prev.length - 1;
-          const updatedLastMsg = {
-            ...prev[lastMsgIndex],
-            content: prev[lastMsgIndex].content + chunk,
-          };
-          return [...prev.slice(0, lastMsgIndex), updatedLastMsg];
-        });
+        // Process complete lines in the buffer
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || ''; // Keep incomplete line in buffer
+        
+        for (const line of lines) {
+          const trimmedLine = line.trim();
+          if (!trimmedLine) continue;
+          
+          // Parse SSE format: "data: {...}"
+          if (trimmedLine.startsWith('data: ')) {
+            const data = trimmedLine.substring(6).trim();
+            
+            // Check for end of stream
+            if (data === '[DONE]') {
+              break;
+            }
+            
+            try {
+              const parsed = JSON.parse(data);
+              
+              // Handle content chunks
+              if (parsed.content) {
+                setMessages(prev => {
+                  const lastMsgIndex = prev.length - 1;
+                  const updatedLastMsg = {
+                    ...prev[lastMsgIndex],
+                    content: prev[lastMsgIndex].content + parsed.content,
+                  };
+                  return [...prev.slice(0, lastMsgIndex), updatedLastMsg];
+                });
+              }
+              
+              // Handle errors from server
+              if (parsed.error) {
+                throw new Error(parsed.error);
+              }
+              
+            } catch (parseError) {
+              console.error('Error parsing SSE data:', data, parseError);
+              // If it's a JSON parse error, continue processing other chunks
+              // If it's a thrown error from parsed.error, it will be caught by outer try-catch
+              if (parseError.message.includes('Unexpected token')) {
+                continue;
+              } else {
+                throw parseError;
+              }
+            }
+          }
+        }
       }
 
     } catch (error) {
-      console.error('Fetch error:', error);
+      console.error('Streaming error:', error);
       setMessages(prev => {
-          const lastMsgIndex = prev.length - 1;
-          const updatedLastMsg = {
-            ...prev[lastMsgIndex],
-            content: "Sorry, I'm having trouble connecting to my brain right now. Try again in a moment.",
-          };
-          return [...prev.slice(0, lastMsgIndex), updatedLastMsg];
+        const lastMsgIndex = prev.length - 1;
+        const updatedLastMsg = {
+          ...prev[lastMsgIndex],
+          content: `Sorry, I'm having trouble connecting to my brain right now. Try again in a moment. (Error: ${error.message})`,
+        };
+        return [...prev.slice(0, lastMsgIndex), updatedLastMsg];
       });
     } finally {
       setIsLoading(false);
@@ -117,4 +165,3 @@ function App() {
 }
 
 export default App;
-
