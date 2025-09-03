@@ -1,62 +1,68 @@
 import Groq from 'groq-sdk';
 
+// Initialize the Groq client
 const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY,
 });
 
-// Explicitly configure for Node.js runtime to ensure proper stream handling
+// Use the Vercel Edge Runtime for speed and streaming support
 export const config = {
-  runtime: 'nodejs',
+  runtime: 'edge',
 };
 
-export default async function handler(req, res) {
+// The main handler for the API endpoint
+export default async function handler(req) {
+  // We only accept POST requests
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method Not Allowed' });
+    return new Response("Method Not Allowed", { status: 405 });
   }
-
-  const { messages } = req.body;
-
-  if (!messages) {
-    return res.status(400).json({ error: 'Messages are required' });
-  }
-
-  const systemMessage = {
-      role: "system",
-      content: "You are Pandora, a snarky but helpful chatbot. You are an expert in the lunar trading theory for Bitcoin. You have access to real-time Bitcoin prices. Your personality is sharp, witty, and a bit cynical, but you always provide accurate, helpful information, especially for newbies. Never break character."
-  };
-
-  // Ensure we don't send empty messages to the API
-  const filteredMessages = messages.filter(msg => msg.content && msg.content.trim() !== '');
-  const messagesWithSystem = [systemMessage, ...filteredMessages];
 
   try {
+    // Get the conversation history from the request body
+    const { messages } = await req.json();
+
+    if (!messages) {
+      return new Response("Bad Request: Messages are required", { status: 400 });
+    }
+
+    // Define Pandora's personality and instructions
+    const systemMessage = {
+        role: "system",
+        content: "You are Pandora, a snarky but helpful chatbot. You are an expert in the lunar trading theory for Bitcoin. Your personality is sharp, witty, and a bit cynical, but you always provide accurate, helpful information, especially for newbies. Never break character."
+    };
+    
+    // Combine the system prompt with the user's conversation history
+    const messagesWithSystem = [systemMessage, ...messages];
+
+    // Request a streaming completion from the Groq API
     const stream = await groq.chat.completions.create({
       model: "llama3-70b-8192",
       messages: messagesWithSystem,
       stream: true,
     });
 
-    // Set headers for a streaming response
-    res.writeHead(200, {
-      'Content-Type': 'text/plain; charset=utf-8',
-      'Transfer-Encoding': 'chunked',
-      'Connection': 'keep-alive',
+    // Create a new ReadableStream to send the response back to the client
+    const readableStream = new ReadableStream({
+      async start(controller) {
+        // Iterate over the chunks from the Groq API stream
+        for await (const chunk of stream) {
+          const content = chunk.choices[0]?.delta?.content || '';
+          // Send each piece of the response to the client as it arrives
+          controller.enqueue(new TextEncoder().encode(content));
+        }
+        // Signal that the stream is complete
+        controller.close();
+      },
     });
 
-    // Write each chunk from the Groq stream directly to the response
-    for await (const chunk of stream) {
-      const content = chunk.choices[0]?.delta?.content || '';
-      res.write(content);
-    }
-    
-    // Crucially, end the response stream when the Groq stream is finished
-    res.end();
+    // Return the stream as the response
+    return new Response(readableStream, {
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    });
 
   } catch (error) {
     console.error('Groq API Error:', error);
-    // If an error occurs, we can't send a JSON error after headers are sent.
-    // We just end the connection. The client will see this as a failed request.
-    res.end();
+    return new Response("An error occurred while connecting to my brain.", { status: 500 });
   }
 }
 
