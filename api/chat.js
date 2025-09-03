@@ -1,68 +1,97 @@
-import Groq from 'groq-sdk';
+// This function now uses a direct `fetch` call, inspired by your working code,
+// but adapted for robust streaming on Vercel.
 
-// Initialize the Groq client
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
-});
-
-// Use the Vercel Edge Runtime for speed and streaming support
+// We are NOT using the edge runtime for better compatibility.
 export const config = {
-  runtime: 'edge',
+  runtime: 'nodejs',
 };
 
-// The main handler for the API endpoint
-export default async function handler(req) {
-  // We only accept POST requests
+export default async function handler(req, res) {
   if (req.method !== 'POST') {
-    return new Response("Method Not Allowed", { status: 405 });
+    return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  try {
-    // Get the conversation history from the request body
-    const { messages } = await req.json();
+  const { messages } = req.body;
+  const groqApiKey = process.env.GROQ_API_KEY;
 
-    if (!messages) {
-      return new Response("Bad Request: Messages are required", { status: 400 });
+  if (!groqApiKey) {
+    return res.status(500).json({ error: 'Server configuration error: GROQ_API_KEY is missing.' });
+  }
+
+  if (!messages) {
+    return res.status(400).json({ error: 'Messages are required' });
+  }
+
+  const systemMessage = {
+      role: "system",
+      content: "You are Pandora, a snarky but helpful chatbot. You are an expert in the lunar trading theory for Bitcoin. Your personality is sharp, witty, and a bit cynical, but you always provide accurate, helpful information, especially for newbies. Never break character."
+  };
+
+  const payload = {
+    model: "llama3-70b-8192",
+    messages: [systemMessage, ...messages],
+    stream: true, // We must stream to avoid timeouts
+  };
+
+  try {
+    const groqResponse = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${groqApiKey}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!groqResponse.ok) {
+        const errorText = await groqResponse.text();
+        console.error('Groq API error response:', errorText);
+        return res.status(groqResponse.status).json({ error: `Groq API Error: ${errorText}` });
     }
 
-    // Define Pandora's personality and instructions
-    const systemMessage = {
-        role: "system",
-        content: "You are Pandora, a snarky but helpful chatbot. You are an expert in the lunar trading theory for Bitcoin. Your personality is sharp, witty, and a bit cynical, but you always provide accurate, helpful information, especially for newbies. Never break character."
-    };
-    
-    // Combine the system prompt with the user's conversation history
-    const messagesWithSystem = [systemMessage, ...messages];
-
-    // Request a streaming completion from the Groq API
-    const stream = await groq.chat.completions.create({
-      model: "llama3-70b-8192",
-      messages: messagesWithSystem,
-      stream: true,
+    // Pipe the streaming response directly to the client
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
     });
 
-    // Create a new ReadableStream to send the response back to the client
-    const readableStream = new ReadableStream({
-      async start(controller) {
-        // Iterate over the chunks from the Groq API stream
-        for await (const chunk of stream) {
-          const content = chunk.choices[0]?.delta?.content || '';
-          // Send each piece of the response to the client as it arrives
-          controller.enqueue(new TextEncoder().encode(content));
+    const reader = groqResponse.body.getReader();
+    const decoder = new TextDecoder();
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      const chunk = decoder.decode(value);
+      
+      // SSE (Server-Sent Events) format is what the Groq stream uses
+      const lines = chunk.split('\n').filter(line => line.trim() !== '');
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const data = line.substring(6);
+          if (data.trim() === '[DONE]') {
+            break;
+          }
+          try {
+            const parsed = JSON.parse(data);
+            const content = parsed.choices[0]?.delta?.content || '';
+            if (content) {
+              res.write(content);
+            }
+          } catch (e) {
+            console.error('Error parsing stream data chunk:', data);
+          }
         }
-        // Signal that the stream is complete
-        controller.close();
-      },
-    });
-
-    // Return the stream as the response
-    return new Response(readableStream, {
-      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-    });
+      }
+    }
+    
+    res.end();
 
   } catch (error) {
-    console.error('Groq API Error:', error);
-    return new Response("An error occurred while connecting to my brain.", { status: 500 });
+    console.error('An unexpected error occurred:', error);
+    res.status(500).json({ error: 'An internal server error occurred.' });
   }
 }
 
